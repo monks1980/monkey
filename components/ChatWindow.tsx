@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode } from "@/lib/types";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
+import { useTTS, ttsSpeak } from "@/hooks/useTTS";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 
@@ -104,7 +105,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, sessionStats,
     slashCommands, slashCommandsLoading,
-    notices, extensionDialog, extensionStatuses, extensionWidgets, respondToExtensionUi,
+    notices: baseNotices, extensionDialog, extensionStatuses, extensionWidgets, respondToExtensionUi,
     isAutoModelSelection,
     agentPhase,
     isNew,
@@ -113,7 +114,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, handleAgentEventRef,
+    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands,
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
@@ -125,16 +126,85 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
 
-  // Wrap agent event handler to play sound on agent_end
-  const origHandler = handleAgentEventRef.current;
+  // TTS：自动朗读已在 useAgentSession 事件源头（agent_end）触发，跟随完成提示音开关。
+  // ChatWindow 这里只负责显示 TTS 错误提示。
+  const { error: ttsError } = useTTS();
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  // 自动朗读状态/失败的可见提示（任务1：让静默失败变成可见提示，不依赖 F12）
+  const [ttsNotice, setTtsNotice] = useState<string | null>(null);
   useEffect(() => {
-    handleAgentEventRef.current = (event) => {
-      if (event.type === "agent_end" && soundEnabledRef.current) {
-        playDoneSoundRef.current();
-      }
-      origHandler?.(event);
-    };
-  }, [origHandler, handleAgentEventRef]);
+    setTtsNotice(ttsError);
+    if (ttsError) {
+      const t = setTimeout(() => setTtsNotice(null), 8000);
+      return () => clearTimeout(t);
+    }
+  }, [ttsError]);
+
+  const notices: NoticeItem[] = useMemo(() => {
+    if (!ttsNotice) return baseNotices;
+    return [
+      ...baseNotices,
+      { id: "tts-error", message: `🔊 ${ttsNotice}`, type: "warning" as const },
+    ];
+  }, [baseNotices, ttsNotice]);
+
+  // ★ 完成提示音 + 自动朗读：紧绑在一起（响声 100% 可靠 → 朗读跟随同一执行点）。
+  // 自动朗读用全局 ttsSpeak，不依赖任何组件状态/hook 闭包。多次兜底取消息（持久化有延迟）。
+  const prevAgentRunningRef = useRef(false);
+  useEffect(() => {
+    const wasRunning = prevAgentRunningRef.current;
+    const nowRunning = agentRunning;
+    prevAgentRunningRef.current = nowRunning;
+    if (wasRunning && !nowRunning) {
+      // 完成提示音（已验证每次都响 = 此处代码 100% 执行）
+      if (soundEnabledRef.current) playDoneSoundRef.current();
+
+      // ★ 自动朗读：跟随同一个开关（soundEnabled = 完成提示音 + 自动朗读 合二为一）。
+      // 开关关了就不朗读（也不响提示音）。
+      if (!soundEnabledRef.current) return;
+
+      // ★ 自动朗读：就在响声的同一执行点触发。多次兜底，直到拿到 assistant 文本。
+      let readDone = false;
+      let lastDiag = "";
+      const tryRead = (attempt: number) => {
+        const msgs = messagesRef.current;
+        let found = "";
+        let blockTypes = "";
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i] as { role?: string; content?: unknown };
+          if (m.role === "assistant" && Array.isArray(m.content)) {
+            const blocks = m.content as Array<{ type: string; text?: string }>;
+            blockTypes = blocks.map((b) => b.type).join(",");
+            found = blocks.filter((b) => b.type === "text" && b.text).map((b) => b.text!).join("\n\n");
+            break;
+          }
+        }
+        const diag = `朗读诊断[${attempt}]: 消息${msgs.length}条, 最后assistant文本${found.length}字${blockTypes ? `,块:${blockTypes}` : ""}${readDone ? ",已读" : ""}`;
+        if (found.trim()) {
+          if (!readDone) {
+            readDone = true;
+            ttsSpeak("任务已完成。\n\n" + found, "auto-result");
+            setTtsNotice(`✅ 已触发朗读（${found.length}字）`);
+            setTimeout(() => setTtsNotice(null), 4000);
+          }
+          return true;
+        }
+        // 显示诊断（不依赖 console，每次都更新）
+        if (diag !== lastDiag) {
+          lastDiag = diag;
+          setTtsNotice(diag);
+        }
+        return false;
+      };
+      [0, 300, 700, 1300, 2000, 3000].forEach((delay, idx) => {
+        setTimeout(() => tryRead(idx), delay);
+      });
+      // 诊断条 8 秒后清除
+      setTimeout(() => setTtsNotice(null), 8000);
+    }
+  }, [agentRunning]);
 
   // Push session stats up to AppShell for the top bar.
   // Compare scalar fields to avoid loops from new object identity each render.

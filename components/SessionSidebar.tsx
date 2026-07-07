@@ -950,6 +950,13 @@ function SessionItem({
   return (
     <div
       onClick={confirmDelete || renaming ? undefined : onClick}
+      onContextMenu={(e) => {
+        // 右键：阻止默认菜单，直接进入删除确认
+        e.preventDefault();
+        e.stopPropagation();
+        if (renaming) return;
+        setConfirmDelete(true);
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); }}
       style={{

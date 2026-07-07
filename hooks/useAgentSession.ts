@@ -736,6 +736,45 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         } else if (!event.aborted) {
           setCompactResult(readCompactResult(event.result, (event.reason as string | undefined) ?? "auto"));
           if (sessionIdRef.current) loadSession(sessionIdRef.current);
+          // ★ 改进2：自动压缩后无条件继续任务（不只 overflow，任何 auto compact 都继续）
+          // 这样任务不会因为压缩而停下来
+          const reason = (event as { reason?: string }).reason;
+          const isAuto = reason === "overflow" || reason === "threshold" || reason === "auto" || (event.type === "auto_compaction_end");
+          if (isAuto && sessionIdRef.current) {
+            const sid = sessionIdRef.current;
+            // 延迟等 loadSession + 压缩结果落盘完成
+            setTimeout(async () => {
+              try {
+                // 重新拉取会话消息，找最后一条 user 文本
+                const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}`);
+                if (!res.ok) return;
+                const d = (await res.json()) as { context?: { messages?: unknown[] } };
+                const msgs = (d.context?.messages ?? []) as Array<{ role?: string; content?: unknown }>;
+                let lastUserText = "";
+                for (let i = msgs.length - 1; i >= 0; i--) {
+                  const m = msgs[i];
+                  if (m.role === "user") {
+                    const c = m.content;
+                    if (typeof c === "string") { lastUserText = c; break; }
+                    if (Array.isArray(c)) {
+                      lastUserText = c.filter((b) => typeof b === "object" && b !== null && (b as {type:string}).type === "text")
+                        .map((b) => (b as {text:string}).text || "").join("\n");
+                      if (lastUserText.trim()) break;
+                    }
+                  }
+                }
+                if (lastUserText.trim()) {
+                  console.log(`[auto-continue] 自动压缩后继续任务（reason=${reason}）`);
+                  // 用 sendAgentCommand 发送（和正常发消息一样的路径）
+                  await sendAgentCommand(sid, { type: "message", text: lastUserText });
+                } else {
+                  console.log("[auto-continue] 没找到最后一条 user 消息，无法继续");
+                }
+              } catch (e) {
+                console.warn("[auto-continue] 自动继续失败:", e);
+              }
+            }, 1200);
+          }
         }
         break;
       case "extension_ui_request":

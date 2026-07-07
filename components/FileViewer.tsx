@@ -6,6 +6,7 @@ import { vs } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import ReactMarkdown from "react-markdown";
 import { useTheme } from "@/hooks/useTheme";
+import { useTTS } from "@/hooks/useTTS";
 import { encodeFilePathForApi, getFileName, getRelativeFilePath } from "@/lib/file-paths";
 import { markdownPreviewRehypePlugins, markdownPreviewRemarkPlugins } from "@/lib/markdown";
 
@@ -691,6 +692,8 @@ export function FileViewer({ filePath, cwd }: Props) {
 
 function TextFileViewer({ filePath, cwd }: Props) {
   const { isDark } = useTheme();
+  // TTS 朗读：当前文件全文（Hook 必须在所有条件 return 之前调用）
+  const { speak, speakingId, stop } = useTTS();
   const [data, setData] = useState<FileData | null>(null);
   const [prevContent, setPrevContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -798,6 +801,9 @@ function TextFileViewer({ filePath, cwd }: Props) {
   const isMarkdown = data.language === "markdown";
   const lines = data.content.split("\n");
   const hasDiff = prevContent !== null && prevContent !== data.content;
+
+  const ttsId = `file-${filePath}`;
+  const isSpeaking = speakingId === ttsId;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -939,6 +945,36 @@ function TextFileViewer({ filePath, cwd }: Props) {
               Raw
             </button>
           </div>
+        )}
+
+        {/* 朗读按钮：对文本/markdown 文件生效，Preview 和 Source 模式都显示 */}
+        {(isMarkdown || (!isHtml && data.language !== "binary")) && (
+          <button
+            onClick={() => (isSpeaking ? stop() : speak(data.content, ttsId))}
+            title={isSpeaking ? "停止朗读" : "朗读全文"}
+            style={{
+              display: "flex", alignItems: "center", gap: 4,
+              padding: "2px 8px", fontSize: 11, cursor: "pointer",
+              background: isSpeaking ? "var(--bg-selected)" : "var(--bg-hover)",
+              color: isSpeaking ? "var(--accent)" : "var(--text-muted)",
+              border: "1px solid var(--border)", borderRadius: 5,
+              fontWeight: isSpeaking ? 600 : 400,
+            }}
+          >
+            {isSpeaking ? (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="6" y="5" width="4" height="14" rx="1" />
+                <rect x="14" y="5" width="4" height="14" rx="1" />
+              </svg>
+            ) : (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              </svg>
+            )}
+            {isSpeaking ? "停止" : "朗读"}
+          </button>
         )}
       </div>
 

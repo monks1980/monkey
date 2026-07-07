@@ -2,9 +2,38 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 
-type Theme = "light" | "dark";
+// 扩展为多主题：light / dark / sky(天蓝) / mint(薄荷绿) / pink(粉色)
+export type Theme = "light" | "dark" | "sky" | "mint" | "pink";
+
+export const THEMES: { id: Theme; label: string }[] = [
+  { id: "light", label: "白色" },
+  { id: "dark", label: "黑色" },
+  { id: "sky", label: "天蓝" },
+  { id: "mint", label: "薄荷绿" },
+  { id: "pink", label: "粉色" },
+];
+
+const THEME_CLASSES: Record<Theme, string> = {
+  light: "",
+  dark: "dark",
+  sky: "theme-sky",
+  mint: "theme-mint",
+  pink: "theme-pink",
+};
 
 const listeners = new Set<() => void>();
+
+function getStoredTheme(): Theme {
+  if (typeof document === "undefined") return "light";
+  try {
+    const stored = localStorage.getItem("pi-theme") as Theme | null;
+    if (stored && stored in THEME_CLASSES) return stored;
+  } catch {
+    // ignore
+  }
+  // 首次访问：检测是否已应用 dark class（兼容旧逻辑）
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
 
 function subscribe(cb: () => void): () => void {
   listeners.add(cb);
@@ -13,9 +42,11 @@ function subscribe(cb: () => void): () => void {
   };
 }
 
+let currentSnapshot: Theme | null = null;
 function getSnapshot(): Theme {
   if (typeof document === "undefined") return "light";
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+  if (currentSnapshot === null) currentSnapshot = getStoredTheme();
+  return currentSnapshot;
 }
 
 function getServerSnapshot(): Theme {
@@ -24,25 +55,28 @@ function getServerSnapshot(): Theme {
 
 type ToggleOrigin = { x: number; y: number };
 
+function applyThemeClass(theme: Theme) {
+  const root = document.documentElement;
+  // 清除所有主题 class
+  Object.values(THEME_CLASSES).forEach((cls) => {
+    if (cls) root.classList.remove(cls);
+  });
+  const cls = THEME_CLASSES[theme];
+  if (cls) root.classList.add(cls);
+  currentSnapshot = theme;
+  try {
+    localStorage.setItem("pi-theme", theme);
+  } catch {
+    // ignore
+  }
+  listeners.forEach((cb) => cb());
+}
+
 export function useTheme() {
   const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  const toggleTheme = useCallback((origin?: ToggleOrigin) => {
-    const next: Theme = getSnapshot() === "dark" ? "light" : "dark";
-
-    const apply = () => {
-      if (next === "dark") {
-        document.documentElement.classList.add("dark");
-      } else {
-        document.documentElement.classList.remove("dark");
-      }
-      try {
-        localStorage.setItem("pi-theme", next);
-      } catch {
-        // ignore storage errors (private mode, quota, etc.)
-      }
-      listeners.forEach((cb) => cb());
-    };
+  const setTheme = useCallback((next: Theme, origin?: ToggleOrigin) => {
+    const apply = () => applyThemeClass(next);
 
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     const supportsVT = typeof document.startViewTransition === "function";
@@ -81,5 +115,12 @@ export function useTheme() {
       });
   }, []);
 
-  return { theme, toggleTheme, isDark: theme === "dark" };
+  // 保留 toggleTheme 向后兼容（light <-> dark 切换）
+  const toggleTheme = useCallback((origin?: ToggleOrigin) => {
+    const current = getSnapshot();
+    const next: Theme = current === "dark" ? "light" : "dark";
+    setTheme(next, origin);
+  }, [setTheme]);
+
+  return { theme, toggleTheme, setTheme, isDark: theme === "dark" };
 }

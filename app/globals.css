@@ -52,6 +52,59 @@ html.dark {
   --bg-subtle: rgba(255,255,255,0.04);
 }
 
+/* ===== 多主题：天蓝 / 薄荷绿 / 粉色 ===== */
+
+html.theme-sky {
+  --bg: #f0f7ff;
+  --bg-panel: #e0effe;
+  --bg-hover: #d4e7fc;
+  --bg-selected: #c8defa;
+  --border: #b8d4f5;
+  --text: #0c2d52;
+  --text-muted: #3b6ea5;
+  --text-dim: #6b94c0;
+  --accent: #2196f3;
+  --accent-hover: #1976d2;
+  --user-bg: #dbeafe;
+  --assistant-bg: #f0f7ff;
+  --tool-bg: #e8f2fc;
+  --bg-subtle: rgba(33,150,243,0.05);
+}
+
+html.theme-mint {
+  --bg: #f0faf6;
+  --bg-panel: #dcefe4;
+  --bg-hover: #cfe7da;
+  --bg-selected: #c1ddcf;
+  --border: #b3d4c4;
+  --text: #0d3326;
+  --text-muted: #2e6b54;
+  --text-dim: #5a9580;
+  --accent: #26a69a;
+  --accent-hover: #00897b;
+  --user-bg: #d1f0e3;
+  --assistant-bg: #f0faf6;
+  --tool-bg: #e3f3ea;
+  --bg-subtle: rgba(38,166,154,0.05);
+}
+
+html.theme-pink {
+  --bg: #fdf2f7;
+  --bg-panel: #fce4ee;
+  --bg-hover: #fbd9e7;
+  --bg-selected: #f9c9de;
+  --border: #f4b8d4;
+  --text: #4a1730;
+  --text-muted: #8a4068;
+  --text-dim: #b06a92;
+  --accent: #ec407a;
+  --accent-hover: #d81b60;
+  --user-bg: #fbcfe8;
+  --assistant-bg: #fdf2f7;
+  --tool-bg: #fce8f1;
+  --bg-subtle: rgba(236,64,122,0.05);
+}
+
 /* Theme toggle: circular wipe via View Transitions API.
    Disable the UA cross-fade; the actual clip-path animation is driven by
    Element.animate() in hooks/useTheme.ts after transition.ready resolves. */

@@ -451,3 +451,38 @@ export async function GET(
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }
+
+// 删除文件（仅限文件，不能删目录，防误删整目录）
+// 安全：必须通过 isFilePathAllowed 校验 + 只允许 unlink 单文件
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  try {
+    const { path: segments } = await params;
+    const filePath = filePathFromSegments(segments);
+
+    // 安全：必须在允许的根目录内
+    const allowedRoots = await getAllowedFileRoots();
+    if (!isFilePathAllowed(filePath, allowedRoots)) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    // 安全：只允许删文件，禁止删目录
+    if (stat.isDirectory()) {
+      return NextResponse.json({ error: "Cannot delete directory (only files)" }, { status: 400 });
+    }
+
+    fs.unlinkSync(filePath);
+    return NextResponse.json({ ok: true, deleted: filePath });
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}

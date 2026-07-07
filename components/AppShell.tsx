@@ -8,11 +8,21 @@ import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
+import { MemoryConfig } from "./MemoryConfig";
 import { BranchNavigator } from "./BranchNavigator";
-import { useTheme } from "@/hooks/useTheme";
+import { useTheme, THEMES, type Theme } from "@/hooks/useTheme";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+
+// 多主题预览色块（用于主题选择器里的小圆点展示）
+const THEME_PREVIEW_COLORS: Record<string, string> = {
+  light: "linear-gradient(135deg, #ffffff 50%, #2563eb 50%)",
+  dark: "linear-gradient(135deg, #1a1a1a 50%, #60a5fa 50%)",
+  sky: "linear-gradient(135deg, #f0f7ff 50%, #2196f3 50%)",
+  mint: "linear-gradient(135deg, #f0faf6 50%, #26a69a 50%)",
+  pink: "linear-gradient(135deg, #fdf2f7 50%, #ec407a 50%)",
+};
 
 type SessionCopyField = "file" | "id";
 
@@ -38,7 +48,7 @@ function copyText(text: string): Promise<void> {
 export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isDark, toggleTheme } = useTheme();
+  const { theme, setTheme, isDark } = useTheme();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
@@ -47,6 +57,8 @@ export function AppShell() {
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [modelsConfigOpen, setModelsConfigOpen] = useState(false);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
+  const [themePickerOpen, setThemePickerOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [skillsConfigOpen, setSkillsConfigOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
@@ -262,10 +274,36 @@ export function AppShell() {
     });
   }, [fileTabs]);
 
-  const handleExportSession = useCallback(() => {
-    if (!selectedSession) return;
-    window.location.href = `/api/sessions/${encodeURIComponent(selectedSession.id)}/export`;
-  }, [selectedSession]);
+  const [exporting, setExporting] = useState(false);
+  const handleExportSession = useCallback(async () => {
+    if (!selectedSession || exporting) return;
+    setExporting(true);
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(selectedSession.id)}/export`);
+      if (!res.ok) throw new Error(`导出失败 ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      // 从响应头取文件名，否则用默认
+      const dispo = res.headers.get("content-disposition") || "";
+      const m = /filename\*?=([^;]+)/i.exec(dispo);
+      let fname = `session-${selectedSession.id}.html`;
+      if (m) {
+        fname = decodeURIComponent(m[1].replace(/^UTF-8''/i, "").replace(/^"|"$/g, ""));
+      }
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Export failed:", e);
+      alert("导出失败：" + (e instanceof Error ? e.message : "未知错误"));
+    } finally {
+      setExporting(false);
+    }
+  }, [selectedSession, exporting]);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
@@ -463,43 +501,94 @@ export function AppShell() {
               </svg>
             )}
           </button>
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <button
+              onClick={() => setThemePickerOpen((v) => !v)}
+              title="主题切换"
+              aria-label="主题切换"
+              aria-expanded={themePickerOpen}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 36, height: 36, padding: 0,
+                background: "none", border: "none", borderRight: "1px solid var(--border)",
+                color: themePickerOpen ? "var(--text)" : "var(--text-muted)",
+                cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
+              onMouseLeave={(e) => { if (!themePickerOpen) e.currentTarget.style.color = "var(--text-muted)"; }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="13.5" cy="6.5" r="2.5" /><circle cx="17.5" cy="10.5" r="2.5" />
+                <circle cx="8.5" cy="7.5" r="2.5" /><circle cx="6.5" cy="12.5" r="2.5" />
+                <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.723 1.648-1.648 0-.43-.147-.796-.425-1.097-.265-.301-.43-.668-.43-1.097 0-.925.723-1.648 1.648-1.648h1.975c3.59 0 6.584-2.913 6.584-6.584C22 6.5 17.5 2 12 2z" />
+              </svg>
+            </button>
+            {themePickerOpen && (
+              <>
+                {/* 点击外部关闭 */}
+                <div
+                  onClick={() => setThemePickerOpen(false)}
+                  style={{ position: "fixed", inset: 0, zIndex: 998 }}
+                />
+                <div
+                  style={{
+                    position: "absolute", top: 42, left: 0, zIndex: 999,
+                    background: "var(--bg-panel)", border: "1px solid var(--border)",
+                    borderRadius: 8, padding: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+                    display: "flex", gap: 8,
+                  }}
+                >
+                  {THEMES.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setTheme(t.id as Theme, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+                        setThemePickerOpen(false);
+                      }}
+                      title={t.label}
+                      aria-label={`主题：${t.label}`}
+                      aria-pressed={theme === t.id}
+                      style={{
+                        width: 28, height: 28, borderRadius: 6, padding: 0,
+                        border: theme === t.id ? "2px solid var(--accent)" : "2px solid var(--border)",
+                        background: THEME_PREVIEW_COLORS[t.id],
+                        cursor: "pointer", transition: "transform 0.1s",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.1)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          {/* 全局记忆与行为约束按钮（编辑 ~/AGENTS.md，所有项目共享） */}
           <button
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-            }}
-            title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            aria-pressed={isDark}
+            onClick={() => setMemoryOpen(true)}
+            title="全局记忆与行为约束（编辑 ~/AGENTS.md，所有项目共享）"
+            aria-label="全局记忆与行为约束"
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
               width: 36, height: 36, padding: 0,
               background: "none", border: "none", borderRight: "1px solid var(--border)",
-              color: "var(--text-muted)", cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
+              color: memoryOpen ? "var(--text)" : "var(--text-muted)",
+              cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
             }}
             onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}
+            onMouseLeave={(e) => { if (!memoryOpen) e.currentTarget.style.color = "var(--text-muted)"; }}
           >
-            {isDark ? (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="5" />
-                <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-              </svg>
-            ) : (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
-            )}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+            </svg>
           </button>
           {showChat && (
             <div style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
               <button
                 onClick={handleExportSession}
-                disabled={!selectedSession}
-                title={selectedSession ? "Export HTML" : "Export is available after the session is saved"}
+                disabled={!selectedSession || exporting}
+                title={exporting ? "导出中..." : (selectedSession ? "Export HTML" : "Export is available after the session is saved")}
                 aria-label="Export HTML"
                 style={{
                   display: "flex",
@@ -512,8 +601,8 @@ export function AppShell() {
                   borderTop: "2px solid transparent",
                   borderRight: "1px solid var(--border)",
                   color: selectedSession ? "var(--text-muted)" : "var(--text-dim)",
-                  cursor: selectedSession ? "pointer" : "not-allowed",
-                  opacity: selectedSession ? 1 : 0.45,
+                  cursor: (!selectedSession || exporting) ? "not-allowed" : "pointer",
+                  opacity: (selectedSession && !exporting) ? 1 : 0.45,
                   flexShrink: 0,
                   fontSize: 11,
                   whiteSpace: "nowrap",
@@ -546,7 +635,7 @@ export function AppShell() {
                     <line x1="12" y1="15" x2="12" y2="3" />
                   </svg>
                 </span>
-                <span>Export</span>
+                <span>{exporting ? "导出中…" : "Export"}</span>
               </button>
               <BranchNavigator
                 tree={branchTree}
@@ -970,6 +1059,9 @@ export function AppShell() {
     {modelsConfigOpen && <ModelsConfig onClose={() => { setModelsConfigOpen(false); setModelsRefreshKey((k) => k + 1); }} />}
     {skillsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
       <SkillsConfig cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd)!} onClose={() => setSkillsConfigOpen(false)} />
+    )}
+    {memoryOpen && (
+      <MemoryConfig cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd ?? ".")!} onClose={() => setMemoryOpen(false)} />
     )}
     </>
   );

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
 import { MarkdownBody } from "./MarkdownBody";
+import { useTTS } from "@/hooks/useTTS";
 import type {
   AgentMessage,
   UserMessage,
@@ -63,6 +64,27 @@ function copyText(text: string): Promise<void> {
 }
 
 export function MessageView({ message, isStreaming, toolResults, modelNames, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp }: Props) {
+  // ★ 唯一改动：识别"压缩摘要消息"并折叠（不影响其它任何消息的渲染）
+  // 原来的 if/return 链完全保留，只在最前面加一个摘要判断
+  if (message.role === "user" || message.role === "assistant") {
+    const rawText = typeof message.content === "string"
+      ? message.content
+      : Array.isArray(message.content)
+        ? message.content.map((b) => {
+            if (typeof b === "string") return b;
+            if (b.type === "text") return b.text ?? "";
+            return "";
+          }).join("\n")
+        : "";
+    // 只折叠真正的压缩摘要（同时满足：长度>800 + 含摘要结构特征）
+    const isCompactionSummary = rawText.length > 800
+      && /The conversation history before this point was compacted|^## 目标|^Goal\b.*Constraints/m.test(rawText);
+    if (isCompactionSummary) {
+      return <CompactionSummaryView text={rawText} />;
+    }
+  }
+
+  // ★ 下面是完全原始的渲染逻辑（一字未改）
   if (message.role === "user") {
     return <UserMessageView message={message as UserMessage} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} prevAssistantEntryId={prevAssistantEntryId} onEditContent={onEditContent} />;
   }
@@ -77,6 +99,27 @@ export function MessageView({ message, isStreaming, toolResults, modelNames, ent
     return <CustomMessageView message={message as CustomMessage} />;
   }
   return null;
+}
+
+// ★ 压缩摘要：折叠成一行提示（点击展开看全文）
+function CompactionSummaryView({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div style={{ marginBottom: 12, padding: "8px 12px", background: "var(--bg-subtle)", borderRadius: 8, border: "1px solid var(--border)" }}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: 12, padding: 0, display: "flex", alignItems: "center", gap: 6 }}
+      >
+        <span>📋</span>
+        <span>上下文已自动压缩（{text.length}字摘要）— {expanded ? "点击收起" : "点击展开查看"}</span>
+      </button>
+      {expanded && (
+        <pre style={{ marginTop: 8, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 12, color: "var(--text-muted)", maxHeight: 400, overflow: "auto" }}>
+          {text}
+        </pre>
+      )}
+    </div>
+  );
 }
 
 function UserMessageView({ message, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent }: {
@@ -207,6 +250,7 @@ function UserMessageView({ message, entryId, onFork, forking, onNavigate, prevAs
               )}
               {copied ? "Copied" : "Copy"}
             </button>
+            <TTButton text={content} id={`u-${entryId}`} hovered={hovered} />
           </div>
           {(canFork || canNavigate) && (
             <div style={{
@@ -494,6 +538,9 @@ function AssistantMessageView({
             )}
             {copied ? "Copied" : "Copy"}
           </button>
+        )}
+        {textContent && !isStreaming && (
+          <TTButton text={textContent} id={`a-${message.timestamp}`} hovered={hovered} />
         )}
         {time && !isStreaming && (
           <span style={{ fontSize: 10, color: "var(--text-dim)", marginLeft: "auto" }}>{time}</span>
@@ -928,4 +975,46 @@ function formatUsage(usage: {
   if (usage.cacheRead) parts.push(`${usage.cacheRead.toLocaleString()} cache`);
   if (usage.cost?.total) parts.push(`$${usage.cost.total.toFixed(4)}`);
   return parts.join(" · ");
+}
+
+// TTS 朗读按钮：每条消息独立调用 useTTS（符合 React Hooks 规则）
+// useTTS 内部用全局 listeners，多个组件共用同一份朗读状态
+function TTButton({ text, id, hovered }: { text: string; id: string; hovered: boolean }) {
+  const { speak, speakingId } = useTTS();
+  const isSpeaking = speakingId === id;
+  return (
+    <button
+      onClick={() => speak(text, id)}
+      title={isSpeaking ? "停止朗读" : "朗读"}
+      style={{
+        display: "flex", alignItems: "center", gap: 4,
+        padding: "3px 8px", height: 22,
+        background: "none", border: "none",
+        borderRadius: 5,
+        color: isSpeaking ? "var(--accent)" : "var(--text-dim)",
+        cursor: "pointer",
+        fontSize: 11, fontWeight: 400,
+        whiteSpace: "nowrap",
+        opacity: hovered ? 1 : 0,
+        pointerEvents: hovered ? "auto" : "none",
+        transition: "opacity 0.12s, color 0.12s",
+      }}
+      onMouseEnter={(e) => { if (!isSpeaking) e.currentTarget.style.color = "var(--accent)"; }}
+      onMouseLeave={(e) => { if (!isSpeaking) e.currentTarget.style.color = "var(--text-dim)"; }}
+    >
+      {isSpeaking ? (
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="6" y="5" width="4" height="14" rx="1" />
+          <rect x="14" y="5" width="4" height="14" rx="1" />
+        </svg>
+      ) : (
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+        </svg>
+      )}
+      {isSpeaking ? "停止" : "朗读"}
+    </button>
+  );
 }
